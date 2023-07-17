@@ -1,0 +1,41 @@
+from pyspark.sql import SparkSession
+from pyspark.ml.stat import Correlation
+from pyspark.ml.feature import VectorAssembler
+
+
+spark = SparkSession.builder.getOrCreate()
+# Read the data from ADLS into a DataFrame
+data = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load("abfss://arc/archive_data_iris_final.csv")
+
+s = data.rdd.getNumPartitions()
+print(s)
+data_repart = data.repartition(100)
+print(data_repart.rdd.getNumPartitions())
+
+#If we limit the input data, then correlation gets changed.But this will not give exact correlation, rather it will give wrong results.
+#data = data.limit(10) 
+
+vector_col = "corr_features"
+assembler = VectorAssembler(inputCols=data_repart.columns[:-1], outputCol=vector_col)
+df_vector = assembler.transform(data_repart).select(vector_col)
+df_vector.explain()
+# get correlation matrix
+matrix = Correlation.corr(df_vector, vector_col).head()
+print(matrix[0])
+df_vector.show()
+
+# in order to plot data into some graph or chart, it is necessary to have whole data in master node. So, line 23 , head() method was invoked.
+  
+import seaborn as sn
+import matplotlib.pyplot as plt
+import pandas as pd
+# Convert correlation matrix to a Pandas DataFrame
+corr_matrix = matrix[0].toArray()
+print(corr_matrix)
+df_corr = pd.DataFrame(corr_matrix, columns=data_repart.columns[:-1], index=data_repart.columns[:-1])
+# Create a heatmap using seaborn
+sn.heatmap(df_corr, annot=True, cmap="coolwarm")
+# Set the title of the plot
+plt.title("Correlation Matrix Heatmap")
+# Display the heatmap
+plt.show()  
