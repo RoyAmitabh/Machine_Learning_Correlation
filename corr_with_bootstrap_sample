@@ -1,0 +1,66 @@
+from pyspark.sql import SparkSession
+from pyspark.ml.stat import Correlation
+from pyspark.ml.feature import VectorAssembler
+from pyspark.sql.functions import rand
+import numpy as np
+
+spark = SparkSession.builder.getOrCreate()
+# Read the data from ADLS into a DataFrame
+data = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load("abfss://arc/archive_data_iris_final.csv")
+
+s = data.rdd.getNumPartitions()
+print(s)
+data_repart = data.repartition(100)
+print(data_repart.rdd.getNumPartitions())
+
+#bootstrapping sample
+num_bootstrap_samples = 50  # Define the number of bootstrap samples
+bootstrap_samples = []      # a list to hold sampled data frames
+
+sample_size = 0.1
+
+for i in range(num_bootstrap_samples):
+    bootstrap_sample = data_repart.sample(withReplacement=True, fraction=sample_size, seed=i).orderBy(rand())
+    bootstrap_samples.append(bootstrap_sample)
+
+
+#validate and process each item of the list, ie.e sampled dataframes
+vector_col = "corr_features"
+# Define an empty list to store correlation matrices
+correlation_matrices = []
+for i, bootstrap_sample in enumerate(bootstrap_samples):
+    # Example: Display the bootstrap sample
+    print(f"Bootstrap Sample {i+1}")
+    bootstrap_sample.show()
+    print("\n")
+    assembler = VectorAssembler(inputCols=bootstrap_sample.columns[:-1], outputCol=vector_col)
+    df_vector = assembler.transform(bootstrap_sample).select(vector_col)
+    df_vector.explain()
+    # get correlation matrix
+    matrix = Correlation.corr(df_vector, vector_col).head()
+    print(matrix[0]) #Dense matrix
+    df_vector.show()
+    correlation_matrices.append(matrix[0].toArray()) #toArray() has been used to convert Dense matrix to normal matrix readable by numpy.
+
+
+print(correlation_matrices)  
+# Calculate the average correlation matrix, Here,  axis = 0,  ensures mean is taken per column, by looking at row data, however in this case, correlation_matrices is a matrix of matrix. so, mean will be calculated by taking cell values across each matrix, for that position cell only.
+average_matrix = np.mean(correlation_matrices,axis = 0)  
+# Print the average correlation matrix
+print("Average Correlation Matrix:")
+print(average_matrix)
+
+#plotting using seaborn
+
+import seaborn as sn
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Convert correlation matrix to a Pandas DataFrame
+df_corr = pd.DataFrame(average_matrix, columns=data_repart.columns[:-1], index=data_repart.columns[:-1])
+# Create a heatmap using seaborn
+sn.heatmap(df_corr, annot=True, cmap="coolwarm")
+# Set the title of the plot
+plt.title("Correlation Matrix Heatmap")
+# Display the heatmap
+plt.show()
